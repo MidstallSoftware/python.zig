@@ -1,0 +1,11 @@
+.{
+    .name = "python.zig",
+    .version = "3.12.2",
+    .paths = .{"."},
+    .dependencies = .{
+        .python = .{
+            .url = "https://www.python.org/ftp/python/3.12.2/Python-3.12.2.tgz",
+            .hash = "12200a8e394cd877df076b741a216550bdccca66bc37909e8dbc30ece40f85e158b7",
+        },
+    },
+}
