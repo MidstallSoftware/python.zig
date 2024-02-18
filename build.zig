@@ -228,7 +228,7 @@ fn addFrozenModule(cs: *std.Build.Step.Compile, source: std.Build.LazyPath, name
     return run.addOutputFileArg(name);
 }
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const linkage = b.option(std.Build.Step.Compile.Linkage, "linkage", "whether to statically or dynamically link the library") orelse .static;
@@ -243,9 +243,6 @@ pub fn build(b: *std.Build) void {
     }, .{});
 
     const pyconfigHeader = b.addConfigHeader(.{
-        .style = .{
-            .autoconf = source.path("pyconfig.h.in"),
-        },
         .include_path = "pyconfig.h",
     }, .{
         .AC_APPLE_UNIVERSAL_BUILD = null,
@@ -256,11 +253,11 @@ pub fn build(b: *std.Build) void {
         .ALIGNOF_SIZE_T = target.result.maxIntAlignment(),
         .ALT_SOABI = null,
         .ANDROID_API_LEVEL = null,
-        .DOUBLE_IS_ARM_MIXED_ENDIAN_IEEE754 = 0,
-        .DOUBLE_IS_BIG_ENDIAN_IEEE754 = 0,
-        .DOUBLE_IS_LITTLE_ENDIAN_IEEE754 = 0,
+        .DOUBLE_IS_ARM_MIXED_ENDIAN_IEEE754 = null,
+        .DOUBLE_IS_BIG_ENDIAN_IEEE754 = @as(?u8, if (target.result.cpu.arch.endian() == .big) 1 else null),
+        .DOUBLE_IS_LITTLE_ENDIAN_IEEE754 = @as(?u8, if (target.result.cpu.arch.endian() == .little) 1 else null),
         .ENABLE_IPV6 = true,
-        .FLOAT_WORDS_BIGENDIAN = 0,
+        .FLOAT_WORDS_BIGENDIAN = @as(?u8, if (target.result.cpu.arch.endian() == .big) 1 else null),
         .GETPGRP_HAVE_ARG = 1,
         .HAVE_ACCEPT = 1,
         .HAVE_ACCEPT4 = 1,
@@ -363,7 +360,7 @@ pub fn build(b: *std.Build) void {
         .HAVE_FCNTL_H = 1,
         .HAVE_FDATASYNC = 1,
         .HAVE_FDOPENDIR = 1,
-        .HAVE_FDWALK = 1,
+        .HAVE_FDWALK = null,
         .HAVE_FEXECVE = 1,
         .HAVE_FFI_CLOSURE_ALLOC = null,
         .HAVE_FFI_PREP_CIF_VAR = null,
@@ -456,7 +453,7 @@ pub fn build(b: *std.Build) void {
         .HAVE_KILL = 1,
         .HAVE_KILLPG = null,
         .HAVE_KQUEUE = 1,
-        .HAVE_LANGINFO_H = null,
+        .HAVE_LANGINFO_H = 1,
         .HAVE_LARGEFILE_SUPPORT = null,
         .HAVE_LCHFLAGS = 1,
         .HAVE_LCHMOD = 1,
@@ -554,7 +551,7 @@ pub fn build(b: *std.Build) void {
         .HAVE_PTHREAD_INIT = 1,
         .HAVE_PTHREAD_KILL = 1,
         .HAVE_PTHREAD_SIGMASK = 1,
-        .HAVE_PTHREAD_STUBS = 1,
+        .HAVE_PTHREAD_STUBS = null,
         .HAVE_PTY_H = 1,
         .HAVE_PWRITE = 1,
         .HAVE_PWRITEV = 1,
@@ -695,7 +692,7 @@ pub fn build(b: *std.Build) void {
         .HAVE_SYS_SYSCALL_H = 1,
         .HAVE_SYS_SYSMACROS_H = 1,
         .HAVE_SYS_SYS_DOMAIN_H = 1,
-        .HAVE_SYS_TERMIO_H = 1,
+        .HAVE_SYS_TERMIO_H = null,
         .HAVE_SYS_TIMES_H = 1,
         .HAVE_SYS_TIME_H = 1,
         .HAVE_SYS_TYPES_H = 1,
@@ -762,7 +759,7 @@ pub fn build(b: *std.Build) void {
         .POSIX_SEMAPHORES_NOT_ENABLED = 1,
         .PTHREAD_KEY_T_IS_COMPATIBLE_WITH_INT = 1,
         .PTHREAD_SYSTEM_SCHED_SUPPORTED = 1,
-        .PYLONG_BITS_IN_DIGIT = 1,
+        .PYLONG_BITS_IN_DIGIT = 30,
         .PY_BUILTIN_HASHLIB_HASHES = 1,
         .PY_COERCE_C_LOCALE = 1,
         .PY_HAVE_PERF_TRAMPOLINE = 1,
@@ -780,36 +777,36 @@ pub fn build(b: *std.Build) void {
         .RETSIGTYPE = 1,
         .SETPGRP_HAVE_ARG = 1,
         .SIGNED_RIGHT_SHIFT_ZERO_FILLS = 1,
-        .SIZEOF_DOUBLE = null,
-        .SIZEOF_FLOAT = null,
-        .SIZEOF_FPOS_T = null,
-        .SIZEOF_INT = null,
-        .SIZEOF_LONG = null,
-        .SIZEOF_LONG_DOUBLE = null,
-        .SIZEOF_LONG_LONG = null,
-        .SIZEOF_OFF_T = null,
-        .SIZEOF_PID_T = null,
-        .SIZEOF_PTHREAD_KEY_T = null,
-        .SIZEOF_PTHREAD_T = null,
-        .SIZEOF_SHORT = null,
-        .SIZEOF_SIZE_T = null,
-        .SIZEOF_TIME_T = null,
-        .SIZEOF_UINTPTR_T = null,
-        .SIZEOF_VOID_P = null,
-        .SIZEOF_WCHAR_T = null,
-        .SIZEOF__BOOL = null,
+        .SIZEOF_DOUBLE = target.result.c_type_byte_size(.double),
+        .SIZEOF_FLOAT = target.result.c_type_byte_size(.float),
+        .SIZEOF_FPOS_T = (target.result.c_type_byte_size(.char) * 16) + target.result.c_type_byte_size(.longlong) + target.result.c_type_byte_size(.double),
+        .SIZEOF_INT = target.result.c_type_byte_size(.int),
+        .SIZEOF_LONG = target.result.c_type_byte_size(.long),
+        .SIZEOF_LONG_DOUBLE = target.result.c_type_byte_size(.longdouble),
+        .SIZEOF_LONG_LONG = target.result.c_type_byte_size(.longlong),
+        .SIZEOF_OFF_T = target.result.c_type_byte_size(.longlong),
+        .SIZEOF_PID_T = target.result.c_type_byte_size(.int),
+        .SIZEOF_PTHREAD_KEY_T = target.result.c_type_byte_size(.uint),
+        .SIZEOF_PTHREAD_T = target.result.c_type_byte_size(.ulong),
+        .SIZEOF_SHORT = target.result.c_type_byte_size(.short),
+        .SIZEOF_SIZE_T = target.result.c_type_byte_size(.uint),
+        .SIZEOF_TIME_T = target.result.c_type_byte_size(.longlong),
+        .SIZEOF_UINTPTR_T = @divExact(target.result.ptrBitWidth(), 8),
+        .SIZEOF_VOID_P = @divExact(target.result.ptrBitWidth(), 8),
+        .SIZEOF_WCHAR_T = target.result.c_type_byte_size(.ushort),
+        .SIZEOF__BOOL = 1,
         .STDC_HEADERS = 1,
         .SYS_SELECT_WITH_SYS_TIME = 1,
         .THREAD_STACK_SIZE = 1,
         .TIMEMODULE_LIB = 1,
         .TM_IN_SYS_TIME = 1,
-        .USE_COMPUTED_GOTOS = 1,
+        .USE_COMPUTED_GOTOS = null,
         ._ALL_SOURCE = 1,
-        .__EXTENSIONS__ = 1,
+        .__EXTENSIONS__ = null,
         ._GNU_SOURCE = 1,
-        ._HPUX_ALT_XOPEN_SOCKET_API = 1,
-        ._MINIX = 1,
-        ._OPENBSD_SOURCE = 1,
+        ._HPUX_ALT_XOPEN_SOCKET_API = null,
+        ._MINIX = null,
+        ._OPENBSD_SOURCE = null,
         ._POSIX_SOURCE = 1,
         ._POSIX_1_SOURCE = 1,
         ._POSIX_PTHREAD_SEMANTICS = 1,
@@ -820,7 +817,7 @@ pub fn build(b: *std.Build) void {
         .__STDC_WANT_IEC_60559_TYPES_EXT__ = 1,
         .__STDC_WANT_LIB_EXT2__ = 1,
         .__STDC_WANT_MATH_SPEC_FUNCS__ = 1,
-        ._TANDEM_SOURCE = 1,
+        ._TANDEM_SOURCE = null,
         .WINDOW_HAS_FLAGS = null,
         .WITH_DECIMAL_CONTEXTVAR = null,
         .WITH_DOC_STRINGS = null,
@@ -832,15 +829,13 @@ pub fn build(b: *std.Build) void {
         .WITH_NEXT_FRAMEWORK = null,
         .WITH_PYMALLOC = null,
         .WITH_VALGRIND = null,
-        .WORDS_BIGENDIAN = null,
+        .WORDS_BIGENDIAN = @as(?u8, if (target.result.cpu.arch.endian() == .big) 1 else null),
         .X87_DOUBLE_ROUNDING = null,
         ._BSD_SOURCE = null,
-        ._DARWIN_C_SOURCE = null,
         ._FILE_OFFSET_BITS = 1,
         ._INCLUDE__STDC_A1_SOURCE = 1,
         ._LARGEFILE_SOURCE = 1,
         ._LARGE_FILES = null,
-        ._NETBSD_SOURCE = null,
         ._POSIX_C_SOURCE = 1,
         ._POSIX_THREADS = 1,
         ._PYTHONFRAMEWORK = "Python",
@@ -848,7 +843,6 @@ pub fn build(b: *std.Build) void {
         ._WASI_EMULATED_GETPID = null,
         ._WASI_EMULATED_PROCESS_CLOCKS = null,
         ._WASI_EMULATED_SIGNAL = null,
-        ._XOPEN_SOURCE = null,
         ._XOPEN_SOURCE_EXTENDED = null,
         .__BSD_VISIBLE = null,
         .clock_t = null,
@@ -861,6 +855,8 @@ pub fn build(b: *std.Build) void {
         .size_t = null,
         .socklen_t = null,
         .uid_t = null,
+        .Py_BUILD_CORE = 1,
+        .SOABI = b.fmt("cpython-{s}", .{try target.result.linuxTriple(b.allocator)}),
     });
 
     const freezeModule = b.addExecutable(.{
@@ -871,6 +867,7 @@ pub fn build(b: *std.Build) void {
     });
 
     freezeModule.addIncludePath(source.path("Include"));
+    freezeModule.addIncludePath(source.path("Include/internal"));
     freezeModule.addConfigHeader(pyconfigHeader);
 
     freezeModule.addCSourceFile(.{ .file = modulesConfig.getOutput() });
@@ -882,8 +879,6 @@ pub fn build(b: *std.Build) void {
             source.path("Programs/_freeze_module.c").getPath(b),
         },
     });
-
-    b.installArtifact(freezeModule);
 
     const lib = std.Build.Step.Compile.create(b, .{
         .name = "python3",
@@ -902,6 +897,7 @@ pub fn build(b: *std.Build) void {
     });
 
     lib.addIncludePath(source.path("Include"));
+    lib.addIncludePath(source.path("Include/internal"));
     lib.addConfigHeader(pyconfigHeader);
 
     {
