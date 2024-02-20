@@ -1,94 +1,7 @@
 const std = @import("std");
 
-const DeepfreezeStep = struct {
-    step: std.Build.Step,
-    modules: std.StringHashMapUnmanaged(std.Build.LazyPath),
-    deepfreeze_program: std.Build.LazyPath,
-    output_file: std.Build.GeneratedFile,
-
-    pub fn create(b: *std.Build, deepfreezeProgram: std.Build.LazyPath) *DeepfreezeStep {
-        const self = b.allocator.create(DeepfreezeStep) catch @panic("OOM");
-        self.* = .{
-            .step = std.Build.Step.init(.{
-                .id = .custom,
-                .name = "Generate deepfreeze.c",
-                .owner = b,
-                .makeFn = make,
-            }),
-            .deepfreeze_program = deepfreezeProgram,
-            .modules = .{},
-            .output_file = .{ .step = &self.step },
-        };
-
-        deepfreezeProgram.addStepDependencies(&self.step);
-        return self;
-    }
-
-    pub fn addModule(self: *DeepfreezeStep, source: std.Build.LazyPath, name: []const u8) void {
-        const b = self.step.owner;
-        self.modules.put(b.allocator, name, source) catch @panic("OOM");
-        source.addStepDependencies(&self.step);
-    }
-
-    fn make(step: *std.Build.Step, _: *std.Progress.Node) anyerror!void {
-        const b = step.owner;
-        const self = @fieldParentPtr(DeepfreezeStep, "step", step);
-
-        var man = b.graph.cache.obtain();
-        defer man.deinit();
-
-        const cmd = try b.findProgram(&.{ "python3", "python" }, &.{});
-
-        _ = try man.addFile(self.deepfreeze_program.getPath2(b, step), null);
-
-        {
-            var iter = self.modules.iterator();
-            while (iter.next()) |module| {
-                _ = try man.addFile(module.value_ptr.getPath2(b, step), null);
-            }
-        }
-
-        if (try step.cacheHit(&man)) {
-            const digest = man.final();
-            self.output_file.path = try b.cache_root.join(b.allocator, &.{ "o", &digest, "deepfreeze.c" });
-            return;
-        }
-
-        const digest = man.final();
-        const cache_path = "o" ++ std.fs.path.sep_str ++ digest;
-
-        var cache_dir = b.cache_root.handle.makeOpenPath(cache_path, .{}) catch |err| {
-            return step.fail("unable to make path  = 1,{}{s} = 1,: {s}", .{
-                b.cache_root, cache_path, @errorName(err),
-            });
-        };
-        defer cache_dir.close();
-        self.output_file.path = try b.cache_root.join(b.allocator, &.{ "o", &digest, "deepfreeze.c" });
-
-        var args = std.ArrayList([]const u8).init(b.allocator);
-        defer args.deinit();
-
-        try args.appendSlice(&.{
-            cmd,
-            self.deepfreeze_program.getPath2(b, step),
-        });
-
-        {
-            var iter = self.modules.iterator();
-            while (iter.next()) |module| {
-                try args.append(b.fmt("{s}:{s}", .{ module.value_ptr.getPath2(b, step), module.key_ptr.* }));
-            }
-        }
-
-        try args.appendSlice(&.{
-            "-o",
-            self.output_file.path.?,
-        });
-
-        try step.evalChildProcess(try args.toOwnedSlice());
-        try step.writeManifest(&man);
-    }
-};
+const DeepfreezeStep = @import("DeepfreezeStep.zig");
+const FreezeStep = @import("FreezeStep.zig");
 
 fn addObjsOmitFrozen(cs: *std.Build.Step.Compile, source: *std.Build.Dependency) void {
     const b = cs.step.owner;
@@ -226,13 +139,10 @@ fn addObjsOmitFrozen(cs: *std.Build.Step.Compile, source: *std.Build.Dependency)
     });
 }
 
-fn addFrozenModule(cs: *std.Build.Step.Compile, source: std.Build.LazyPath, name: []const u8) std.Build.LazyPath {
-    const b = cs.step.owner;
-    const run = b.addRunArtifact(cs);
-
-    run.addArg(std.fs.path.stem(name));
-    run.addFileArg(source);
-    return run.addOutputFileArg(name);
+fn addFrozenModule(b: *std.Build, prog: std.Build.LazyPath, source: std.Build.LazyPath, name: []const u8) std.Build.LazyPath {
+    return .{
+        .generated = &FreezeStep.create(b, prog, source, name).output_file,
+    };
 }
 
 fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std.Build.Step.Compile.Linkage) *std.Build.Step.ConfigHeader {
@@ -287,7 +197,7 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .HAVE_CLOCK_GETTIME = 1,
         .HAVE_CLOCK_NANOSLEEP = 1,
         .HAVE_CLOCK_SETTIME = 1,
-        .HAVE_CLOSE_RANGE = 1,
+        .HAVE_CLOSE_RANGE = @as(?u8, if (target.result.isGnuLibC()) 1 else null),
         .HAVE_COMPUTED_GOTOS = 0,
         .HAVE_CONFSTR = 0,
         .HAVE_CONIO_H = 0,
@@ -457,7 +367,7 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .HAVE_LIBDL = null,
         .HAVE_LIBDLD = null,
         .HAVE_LIBIEEE = null,
-        .HAVE_LIBINTL_H = null,
+        .HAVE_LIBINTL_H = 1,
         .HAVE_LIBRESOLV = null,
         .HAVE_LIBSENDFILE = null,
         .HAVE_LIBSQLITE3 = null,
@@ -534,7 +444,7 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .HAVE_POSIX_SPAWNP = 1,
         .HAVE_PREAD = 1,
         .HAVE_PREADV = 1,
-        .HAVE_PREADV2 = 1,
+        .HAVE_PREADV2 = @as(?u8, if (target.result.isGnuLibC()) 1 else null),
         .HAVE_PRLIMIT = 1,
         .HAVE_PROCESS_H = 1,
         .HAVE_PROTOTYPES = 1,
@@ -549,7 +459,7 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .HAVE_PTY_H = 1,
         .HAVE_PWRITE = 1,
         .HAVE_PWRITEV = 1,
-        .HAVE_PWRITEV2 = 1,
+        .HAVE_PWRITEV2 = @as(?u8, if (target.result.isGnuLibC()) 1 else null),
         .HAVE_READLINE_READLINE_H = 1,
         .HAVE_READLINK = 1,
         .HAVE_READLINKAT = 1,
@@ -574,7 +484,7 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .HAVE_SCHED_SETAFFINITY = 1,
         .HAVE_SCHED_SETPARAM = 1,
         .HAVE_SCHED_SETSCHEDULER = 1,
-        .HAVE_SEM_CLOCKWAIT = 1,
+        .HAVE_SEM_CLOCKWAIT = @as(?u8, if (target.result.isGnuLibC()) 1 else null),
         .HAVE_SEM_GETVALUE = 1,
         .HAVE_SEM_OPEN = 1,
         .HAVE_SEM_TIMEDWAIT = 1,
@@ -750,11 +660,12 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .PACKAGE_TARNAME = "python-3.12.2",
         .PACKAGE_URL = "https://github.com/MidstallSoftware/python.zig",
         .PACKAGE_VERSION = "3.12.2",
+        .VERSION = "3.12.2",
         .POSIX_SEMAPHORES_NOT_ENABLED = 1,
         .PTHREAD_KEY_T_IS_COMPATIBLE_WITH_INT = 1,
         .PTHREAD_SYSTEM_SCHED_SUPPORTED = 1,
         .PYLONG_BITS_IN_DIGIT = 30,
-        .PY_BUILTIN_HASHLIB_HASHES = 1,
+        .PY_BUILTIN_HASHLIB_HASHES = "md5,sha1,sha2,sha3,blake2",
         .PY_COERCE_C_LOCALE = 1,
         .PY_HAVE_PERF_TRAMPOLINE = null,
         .PY_SQLITE_ENABLE_LOAD_EXTENSION = 1,
@@ -852,7 +763,34 @@ fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std
         .uid_t = null,
         .Py_BUILD_CORE = 1,
         .SOABI = b.fmt("cpython-{s}", .{target.result.linuxTriple(b.allocator) catch @panic("OOM")}),
-        .PYTHON_FROZEN_MODULE_IMPORTLIB_BOOTSTRAP = "importlib._bootstrap.h",
+        .PREFIX = "/",
+        .EXEC_PREFIX = "/libexec",
+        .PLATLIBDIR = "/lib/python3.12.2",
+        .VPATH = "/",
+        .PYTHON_FROZEN_MODULE_GETPATH = "frozen_modules/getpath.h",
+        .PYTHON_FROZEN_MODULE_IMPORTLIB_BOOTSTRAP = "frozen_modules/importlib._bootstrap.h",
+        .PYTHON_FROZEN_MODULE_IMPORTLIB_BOOTSTRAP_EXTERNAL = "frozen_modules/importlib._bootstrap_external.h",
+        .PYTHON_FROZEN_MODULE_ZIPIMPORT = "frozen_modules/zipimport.h",
+        .PYTHON_FROZEN_MODULE_ABC = "frozen_modules/abc.h",
+        .PYTHON_FROZEN_MODULE_CODECS = "frozen_modules/codecs.h",
+        .PYTHON_FROZEN_MODULE_IO = "frozen_modules/io.h",
+        .PYTHON_FROZEN_MODULE__COLLECTIONS_ABC = "frozen_modules/_collections_abc.h",
+        .PYTHON_FROZEN_MODULE__SITEBUILTINS = "frozen_modules/_sitebuiltins.h",
+        .PYTHON_FROZEN_MODULE_GENERICPATH = "frozen_modules/genericpath.h",
+        .PYTHON_FROZEN_MODULE_NTPATH = "frozen_modules/ntpath.h",
+        .PYTHON_FROZEN_MODULE_POSIXPATH = "frozen_modules/posixpath.h",
+        .PYTHON_FROZEN_MODULE_OS = "frozen_modules/os.h",
+        .PYTHON_FROZEN_MODULE_SITE = "frozen_modules/site.h",
+        .PYTHON_FROZEN_MODULE_STAT = "frozen_modules/stat.h",
+        .PYTHON_FROZEN_MODULE_IMPORTLIB_UTIL = "frozen_modules/importlib.util.h",
+        .PYTHON_FROZEN_MODULE_IMPORTLIB_MACHINERY = "frozen_modules/importlib.machinery.h",
+        .PYTHON_FROZEN_MODULE_RUNPY = "frozen_modules/runpy.h",
+        .PYTHON_FROZEN_MODULE___HELLO__ = "frozen_modules/__hello__.h",
+        .PYTHON_FROZEN_MODULE___PHELLO__ = "frozen_modules/__phello__.h",
+        .PYTHON_FROZEN_MODULE___PHELLO__HAM = "frozen_modules/__phello__.ham.h",
+        .PYTHON_FROZEN_MODULE___PHELLO__HAM_EGGS = "frozen_modules/__phello__.ham.eggs.h",
+        .PYTHON_FROZEN_MODULE___PHELLO__SPAM = "frozen_modules/__phello__.spam.h",
+        .PYTHON_FROZEN_MODULE_FROZEN_ONLY = "frozen_modules/frozen_only.h",
     });
 }
 
@@ -860,6 +798,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const linkage = b.option(std.Build.Step.Compile.Linkage, "linkage", "whether to statically or dynamically link the library") orelse .static;
+    const use_python_freeze = b.option(bool, "use-python-freeze", "whether to use the host's python exec to freeze modules or to build one") orelse true;
 
     const source = b.dependency("python", .{});
 
@@ -891,6 +830,8 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
+    const freezeProg = if (use_python_freeze) source.path("Programs/_freeze_module.py") else freezeModule.getEmittedBin();
+
     const lib = std.Build.Step.Compile.create(b, .{
         .name = "python3",
         .root_module = .{
@@ -907,23 +848,47 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
+    const pyconfig = getConfigHeader(b, target, linkage);
+
     lib.addIncludePath(source.path("Include"));
     lib.addIncludePath(source.path("Include/internal"));
-    lib.addConfigHeader(getConfigHeader(b, target, linkage));
+    lib.addConfigHeader(pyconfig);
 
     const deepfreeze = DeepfreezeStep.create(b, source.path("Tools/build/deepfreeze.py"));
-    deepfreeze.step.dependOn(&freezeModule.step);
+    if (!use_python_freeze) deepfreeze.step.dependOn(&freezeModule.step);
 
-    {
-        const module = addFrozenModule(freezeModule, source.path("Lib/importlib/_bootstrap.py"), "importlib._bootstrap.h");
-        lib.addIncludePath(.{
-            .generated_dirname = .{
-                .generated = module.generated,
-                .up = 0,
-            },
-        });
+    const headers = b.addWriteFiles();
+    lib.addIncludePath(headers.getDirectory());
 
-        deepfreeze.addModule(module, "importlib._bootstrap");
+    inline for (@as([]const struct { []const u8, []const u8 }, &.{
+        .{ "Modules/getpath.py", "getpath" },
+        .{ "Lib/importlib/_bootstrap.py", "importlib._bootstrap" },
+        .{ "Lib/importlib/_bootstrap_external.py", "importlib._bootstrap_external" },
+        .{ "Lib/zipimport.py", "zipimport" },
+        .{ "Lib/abc.py", "abc" },
+        .{ "Lib/codecs.py", "codecs" },
+        .{ "Lib/io.py", "io" },
+        .{ "Lib/_collections_abc.py", "_collections_abc" },
+        .{ "Lib/_sitebuiltins.py", "_sitebuiltins" },
+        .{ "Lib/genericpath.py", "genericpath" },
+        .{ "Lib/ntpath.py", "ntpath" },
+        .{ "Lib/posixpath.py", "posixpath" },
+        .{ "Lib/os.py", "os" },
+        .{ "Lib/site.py", "site" },
+        .{ "Lib/stat.py", "stat" },
+        .{ "Lib/importlib/util.py", "importlib.util" },
+        .{ "Lib/importlib/machinery.py", "importlib.machinery" },
+        .{ "Lib/runpy.py", "runpy" },
+        .{ "Lib/__hello__.py", "__hello__" },
+        .{ "Lib/__phello__/__init__.py", "__phello__" },
+        .{ "Lib/__phello__/ham/__init__.py", "__phello__.ham" },
+        .{ "Lib/__phello__/ham/eggs.py", "__phello__.ham.eggs" },
+        .{ "Lib/__phello__/spam.py", "__phello__.spam" },
+        .{ "Tools/freeze/flag.py", "frozen_only" },
+    })) |entry| {
+        const module = addFrozenModule(b, freezeProg, source.path(entry[0]), entry[1]);
+        _ = headers.addCopyFile(module, b.fmt("frozen_modules/{s}.h", .{entry[1]}));
+        deepfreeze.addModule(module, entry[1]);
         lib.step.dependOn(&deepfreeze.step);
     }
 
@@ -941,5 +906,31 @@ pub fn build(b: *std.Build) !void {
         },
     });
 
+    lib.installHeadersDirectoryOptions(.{
+        .source_dir = source.path("Include"),
+        .install_dir = .header,
+        .install_subdir = "",
+    });
+
+    lib.installConfigHeader(pyconfig, .{});
+
     b.installArtifact(lib);
+
+    const exec = b.addExecutable(.{
+        .name = "python",
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .linkage = linkage,
+    });
+
+    exec.addIncludePath(source.path("Include"));
+    exec.addConfigHeader(pyconfig);
+    exec.linkLibrary(lib);
+
+    exec.addCSourceFile(.{
+        .file = source.path("Programs/python.c"),
+    });
+
+    b.installArtifact(exec);
 }
