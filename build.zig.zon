@@ -4,8 +4,8 @@
     .paths = .{"."},
     .dependencies = .{
         .python = .{
-            .url = "https://www.python.org/ftp/python/3.12.2/Python-3.12.2.tgz",
-            .hash = "12200a8e394cd877df076b741a216550bdccca66bc37909e8dbc30ece40f85e158b7",
+            .url = "https://github.com/MidstallSoftware/cpython/archive/5fcfcab85bdef583263126ab98d49921c812ec15.tar.gz",
+            .hash = "12207a76b79a7399a3937c1d5f67b00f85b360086f83e5f032a7525912d15f4e5910",
         },
     },
 }

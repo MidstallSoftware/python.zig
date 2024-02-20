@@ -27,6 +27,7 @@ const DeepfreezeStep = struct {
     pub fn addModule(self: *DeepfreezeStep, source: std.Build.LazyPath, name: []const u8) void {
         const b = self.step.owner;
         self.modules.put(b.allocator, name, source) catch @panic("OOM");
+        source.addStepDependencies(&self.step);
     }
 
     fn make(step: *std.Build.Step, _: *std.Progress.Node) anyerror!void {
@@ -95,6 +96,11 @@ fn addObjsOmitFrozen(cs: *std.Build.Step.Compile, source: *std.Build.Dependency)
     cs.addCSourceFiles(.{
         .files = &.{
             source.path("Modules/getbuildinfo.c").getPath(b),
+            source.path("Modules/posixmodule.c").getPath(b),
+            source.path("Modules/faulthandler.c").getPath(b),
+            source.path("Modules/timemodule.c").getPath(b),
+            source.path("Modules/atexitmodule.c").getPath(b),
+            source.path("Modules/signalmodule.c").getPath(b),
             source.path("Parser/token.c").getPath(b),
             source.path("Parser/pegen.c").getPath(b),
             source.path("Parser/pegen_errors.c").getPath(b),
@@ -224,25 +230,13 @@ fn addFrozenModule(cs: *std.Build.Step.Compile, source: std.Build.LazyPath, name
     const b = cs.step.owner;
     const run = b.addRunArtifact(cs);
 
+    run.addArg(std.fs.path.stem(name));
     run.addFileArg(source);
     return run.addOutputFileArg(name);
 }
 
-pub fn build(b: *std.Build) !void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
-    const linkage = b.option(std.Build.Step.Compile.Linkage, "linkage", "whether to statically or dynamically link the library") orelse .static;
-
-    const source = b.dependency("python", .{});
-
-    const modulesConfig = b.addConfigHeader(.{
-        .style = .{
-            .autoconf = source.path("Modules/config.c.in"),
-        },
-        .include_path = "config.c",
-    }, .{});
-
-    const pyconfigHeader = b.addConfigHeader(.{
+fn getConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget, linkage: std.Build.Step.Compile.Linkage) *std.Build.Step.ConfigHeader {
+    return b.addConfigHeader(.{
         .include_path = "pyconfig.h",
     }, .{
         .AC_APPLE_UNIVERSAL_BUILD = null,
@@ -250,7 +244,7 @@ pub fn build(b: *std.Build) !void {
         .AIX_GENUINE_CPLUSPLUS = null,
         .ALIGNOF_LONG = target.result.c_type_alignment(.long),
         .ALIGNOF_MAX_ALIGN_T = target.result.maxIntAlignment(),
-        .ALIGNOF_SIZE_T = target.result.maxIntAlignment(),
+        .ALIGNOF_SIZE_T = target.result.c_type_alignment(if (target.result.ptrBitWidth() == 64) .ulonglong else .ulong),
         .ALT_SOABI = null,
         .ANDROID_API_LEVEL = null,
         .DOUBLE_IS_ARM_MIXED_ENDIAN_IEEE754 = null,
@@ -258,7 +252,7 @@ pub fn build(b: *std.Build) !void {
         .DOUBLE_IS_LITTLE_ENDIAN_IEEE754 = @as(?u8, if (target.result.cpu.arch.endian() == .little) 1 else null),
         .ENABLE_IPV6 = true,
         .FLOAT_WORDS_BIGENDIAN = @as(?u8, if (target.result.cpu.arch.endian() == .big) 1 else null),
-        .GETPGRP_HAVE_ARG = 1,
+        .GETPGRP_HAVE_ARG = null,
         .HAVE_ACCEPT = 1,
         .HAVE_ACCEPT4 = 1,
         .HAVE_ACOSH = 1,
@@ -271,20 +265,20 @@ pub fn build(b: *std.Build) !void {
         .HAVE_ASM_TYPES_H = 1,
         .HAVE_ATANH = 1,
         .HAVE_BIND = 1,
-        .HAVE_BIND_TEXTDOMAIN_CODESET = 0,
-        .HAVE_BLUETOOTH_BLUETOOTH_H = 0,
-        .HAVE_BLUETOOTH_H = 0,
-        .HAVE_BROKEN_POLL = 0,
-        .HAVE_BROKEN_MBSTOWCS = 0,
-        .HAVE_BROKEN_NICE = 0,
-        .HAVE_BROKEN_PIPE_BUF = 0,
-        .HAVE_BROKEN_PTHREAD_SIGMASK = 0,
-        .HAVE_BROKEN_POSIX_SEMAPHORES = 0,
-        .HAVE_BROKEN_SEM_GETVALUE = 0,
-        .HAVE_BROKEN_UNSETENV = 0,
+        .HAVE_BIND_TEXTDOMAIN_CODESET = null,
+        .HAVE_BLUETOOTH_BLUETOOTH_H = null,
+        .HAVE_BLUETOOTH_H = null,
+        .HAVE_BROKEN_POLL = null,
+        .HAVE_BROKEN_MBSTOWCS = null,
+        .HAVE_BROKEN_NICE = null,
+        .HAVE_BROKEN_PIPE_BUF = null,
+        .HAVE_BROKEN_PTHREAD_SIGMASK = null,
+        .HAVE_BROKEN_POSIX_SEMAPHORES = null,
+        .HAVE_BROKEN_SEM_GETVALUE = null,
+        .HAVE_BROKEN_UNSETENV = null,
         .HAVE_BUILTIN_ATOMIC = 1,
-        .HAVE_BZLIB_H = 0,
-        .HAVE_CHFLAGS = 1,
+        .HAVE_BZLIB_H = null,
+        .HAVE_CHFLAGS = null,
         .HAVE_CHMOD = 1,
         .HAVE_CHOWN = 1,
         .HAVE_CHROOT = 1,
@@ -301,8 +295,8 @@ pub fn build(b: *std.Build) !void {
         .HAVE_COPY_FILE_RANGE = 0,
         .HAVE_CRYPT_H = 0,
         .HAVE_CRYPT_R = 0,
-        .HAVE_CTERMID = 0,
-        .HAVE_CTERMID_R = 0,
+        .HAVE_CTERMID = null,
+        .HAVE_CTERMID_R = null,
         .HAVE_CURSES_FILTER = 0,
         .HAVE_CURSES_H = 0,
         .HAVE_CURSES_HAS_KEY = 0,
@@ -367,7 +361,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_FFI_PREP_CLOSURE_LOC = null,
         .HAVE_FLOCK = 1,
         .HAVE_FORK = 1,
-        .HAVE_FORK1 = 1,
+        .HAVE_FORK1 = null,
         .HAVE_FORKPTY = 1,
         .HAVE_FPATHCONF = 1,
         .HAVE_FSEEK64 = null,
@@ -399,7 +393,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_GETGRGID = 1,
         .HAVE_GETGRGID_R = null,
         .HAVE_GETGRNAM_R = null,
-        .HAVE_GETGROUPLIST = 1,
+        .HAVE_GETGROUPLIST = @as(?u8, if (target.result.isMusl()) 1 else null),
         .HAVE_GETGROUPS = 1,
         .HAVE_GETHOSTBYADDR = 1,
         .HAVE_GETHOSTBYNAME = 1,
@@ -438,7 +432,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_GETUID = 1,
         .HAVE_GETWD = 1,
         .HAVE_GLIBC_MEMMOVE_BUG = null,
-        .HAVE_GRP_H = null,
+        .HAVE_GRP_H = 1,
         .HAVE_HSTRERROR = null,
         .HAVE_HTOLE64 = null,
         .HAVE_IEEEFP_H = null,
@@ -455,7 +449,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_KQUEUE = 1,
         .HAVE_LANGINFO_H = 1,
         .HAVE_LARGEFILE_SUPPORT = null,
-        .HAVE_LCHFLAGS = 1,
+        .HAVE_LCHFLAGS = null,
         .HAVE_LCHMOD = 1,
         .HAVE_LCHOWN = 1,
         .HAVE_LIBB2 = null,
@@ -531,7 +525,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_PAUSE = 1,
         .HAVE_PIPE = 1,
         .HAVE_PIPE2 = 1,
-        .HAVE_PLOCK = 1,
+        .HAVE_PLOCK = null,
         .HAVE_POLL = 1,
         .HAVE_POLL_H = 1,
         .HAVE_POSIX_FADVISE = 1,
@@ -573,7 +567,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_RL_PRE_INPUT_HOOK = 1,
         .HAVE_RL_RESIZE_TERMINAL = 1,
         .HAVE_RPC_RPC_H = 1,
-        .HAVE_RTPSPAWN = 1,
+        .HAVE_RTPSPAWN = null,
         .HAVE_SCHED_GET_PRIORITY_MAX = 1,
         .HAVE_SCHED_H = 1,
         .HAVE_SCHED_RR_GET_INTERVAL = 1,
@@ -596,8 +590,8 @@ pub fn build(b: *std.Build) !void {
         .HAVE_SETJMP_H = 1,
         .HAVE_SETLOCALE = 1,
         .HAVE_SETNS = 1,
-        .HAVE_SETPGID = 1,
-        .HAVE_SETPGRP = 1,
+        .HAVE_SETPGID = null,
+        .HAVE_SETPGRP = null,
         .HAVE_SETPRIORITY = 1,
         .HAVE_SETREGID = 1,
         .HAVE_SETRESGID = 1,
@@ -642,16 +636,16 @@ pub fn build(b: *std.Build) !void {
         .HAVE_STRINGS_H = 1,
         .HAVE_STRING_H = 1,
         .HAVE_STRLCPY = 1,
-        .HAVE_STROPTS_H = 1,
+        .HAVE_STROPTS_H = null,
         .HAVE_STRSIGNAL = 1,
         .HAVE_STRUCT_PASSWD_PW_GECOS = 1,
         .HAVE_STRUCT_PASSWD_PW_PASSWD = 1,
-        .HAVE_STRUCT_STAT_ST_BIRTHTIME = 1,
-        .HAVE_STRUCT_STAT_ST_BLKSIZE = 1,
-        .HAVE_STRUCT_STAT_ST_BLOCKS = 1,
-        .HAVE_STRUCT_STAT_ST_FLAGS = 1,
-        .HAVE_STRUCT_STAT_ST_GEN = 1,
-        .HAVE_STRUCT_STAT_ST_RDEV = 1,
+        .HAVE_STRUCT_STAT_ST_BIRTHTIME = null,
+        .HAVE_STRUCT_STAT_ST_BLKSIZE = null,
+        .HAVE_STRUCT_STAT_ST_BLOCKS = null,
+        .HAVE_STRUCT_STAT_ST_FLAGS = null,
+        .HAVE_STRUCT_STAT_ST_GEN = null,
+        .HAVE_STRUCT_STAT_ST_RDEV = null,
         .HAVE_STRUCT_TM_TM_ZONE = 1,
         .HAVE_SYMLINK = 1,
         .HAVE_SYMLINKAT = 1,
@@ -672,10 +666,10 @@ pub fn build(b: *std.Build) !void {
         .HAVE_SYS_FILE_H = 1,
         .HAVE_SYS_IOCTL_H = 1,
         .HAVE_SYS_KERN_CONTROL_H = 1,
-        .HAVE_SYS_LOADAVG_H = 1,
-        .HAVE_SYS_LOCK_H = 1,
-        .HAVE_SYS_MEMFD_H = 1,
-        .HAVE_SYS_MKDEV_H = 1,
+        .HAVE_SYS_LOADAVG_H = null,
+        .HAVE_SYS_LOCK_H = null,
+        .HAVE_SYS_MEMFD_H = null,
+        .HAVE_SYS_MKDEV_H = null,
         .HAVE_SYS_MMAN_H = 1,
         .HAVE_SYS_MODEM_H = 1,
         .HAVE_SYS_NDIR_H = 1,
@@ -747,7 +741,7 @@ pub fn build(b: *std.Build) !void {
         .HAVE_ZLIB_COPY = null,
         .HAVE_ZLIB_H = null,
         .HAVE__GETPTY = 1,
-        .MAJOR_IN_MKDEV = 1,
+        .MAJOR_IN_MKDEV = null,
         .MAJOR_IN_SYSMACROS = 1,
         .MVWDELCH_IS_EXPRESSION = 1,
         .PACKAGE_BUGREPORT = "https://github.com/MidstallSoftware/python.zig/issues",
@@ -762,7 +756,7 @@ pub fn build(b: *std.Build) !void {
         .PYLONG_BITS_IN_DIGIT = 30,
         .PY_BUILTIN_HASHLIB_HASHES = 1,
         .PY_COERCE_C_LOCALE = 1,
-        .PY_HAVE_PERF_TRAMPOLINE = 1,
+        .PY_HAVE_PERF_TRAMPOLINE = null,
         .PY_SQLITE_ENABLE_LOAD_EXTENSION = 1,
         .PY_SQLITE_HAVE_SERIALIZE = 1,
         .PY_SSL_DEFAULT_CIPHERS = 1,
@@ -789,7 +783,7 @@ pub fn build(b: *std.Build) !void {
         .SIZEOF_PTHREAD_KEY_T = target.result.c_type_byte_size(.uint),
         .SIZEOF_PTHREAD_T = target.result.c_type_byte_size(.ulong),
         .SIZEOF_SHORT = target.result.c_type_byte_size(.short),
-        .SIZEOF_SIZE_T = target.result.c_type_byte_size(.uint),
+        .SIZEOF_SIZE_T = @divExact(target.result.ptrBitWidth(), 8),
         .SIZEOF_TIME_T = target.result.c_type_byte_size(.longlong),
         .SIZEOF_UINTPTR_T = @divExact(target.result.ptrBitWidth(), 8),
         .SIZEOF_VOID_P = @divExact(target.result.ptrBitWidth(), 8),
@@ -804,6 +798,7 @@ pub fn build(b: *std.Build) !void {
         ._ALL_SOURCE = 1,
         .__EXTENSIONS__ = null,
         ._GNU_SOURCE = 1,
+        .__USE_MISC = 1,
         ._HPUX_ALT_XOPEN_SOCKET_API = null,
         ._MINIX = null,
         ._OPENBSD_SOURCE = null,
@@ -856,19 +851,35 @@ pub fn build(b: *std.Build) !void {
         .socklen_t = null,
         .uid_t = null,
         .Py_BUILD_CORE = 1,
-        .SOABI = b.fmt("cpython-{s}", .{try target.result.linuxTriple(b.allocator)}),
+        .SOABI = b.fmt("cpython-{s}", .{target.result.linuxTriple(b.allocator) catch @panic("OOM")}),
+        .PYTHON_FROZEN_MODULE_IMPORTLIB_BOOTSTRAP = "importlib._bootstrap.h",
     });
+}
+
+pub fn build(b: *std.Build) !void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const linkage = b.option(std.Build.Step.Compile.Linkage, "linkage", "whether to statically or dynamically link the library") orelse .static;
+
+    const source = b.dependency("python", .{});
+
+    const modulesConfig = b.addConfigHeader(.{
+        .style = .{
+            .autoconf = source.path("Modules/config.c.in"),
+        },
+        .include_path = "config.c",
+    }, .{});
 
     const freezeModule = b.addExecutable(.{
         .name = "freeze-module",
         .target = b.host,
         .link_libc = true,
-        .linkage = linkage,
+        .linkage = if (linkage == .static and !b.host.result.isGnuLibC()) linkage else null,
     });
 
     freezeModule.addIncludePath(source.path("Include"));
     freezeModule.addIncludePath(source.path("Include/internal"));
-    freezeModule.addConfigHeader(pyconfigHeader);
+    freezeModule.addConfigHeader(getConfigHeader(b, b.host, linkage));
 
     freezeModule.addCSourceFile(.{ .file = modulesConfig.getOutput() });
     addObjsOmitFrozen(freezeModule, source);
@@ -898,18 +909,27 @@ pub fn build(b: *std.Build) !void {
 
     lib.addIncludePath(source.path("Include"));
     lib.addIncludePath(source.path("Include/internal"));
-    lib.addConfigHeader(pyconfigHeader);
+    lib.addConfigHeader(getConfigHeader(b, target, linkage));
+
+    const deepfreeze = DeepfreezeStep.create(b, source.path("Tools/build/deepfreeze.py"));
+    deepfreeze.step.dependOn(&freezeModule.step);
 
     {
-        const deepfreeze = DeepfreezeStep.create(b, source.path("Tools/build/deepfreeze.py"));
+        const module = addFrozenModule(freezeModule, source.path("Lib/importlib/_bootstrap.py"), "importlib._bootstrap.h");
+        lib.addIncludePath(.{
+            .generated_dirname = .{
+                .generated = module.generated,
+                .up = 0,
+            },
+        });
 
-        //deepfreeze.addModule(addFrozenModule(freezeModule, source.path("Lib/importlib/_bootstrap.py"), "importlib._bootstrap.h"), "importlib._bootstrap");
-
-        //lib.addCSourceFile(.{ .file = .{
-        //    .generated = &deepfreeze.output_file,
-        //} });
-        _ = deepfreeze;
+        deepfreeze.addModule(module, "importlib._bootstrap");
+        lib.step.dependOn(&deepfreeze.step);
     }
+
+    lib.addCSourceFile(.{ .file = .{
+        .generated = &deepfreeze.output_file,
+    } });
 
     lib.addCSourceFile(.{ .file = modulesConfig.getOutput() });
     addObjsOmitFrozen(lib, source);
